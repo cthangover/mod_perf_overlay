@@ -1,0 +1,24 @@
+{
+  "Kind": "location3d",
+  "Items": [
+    {
+      "Id": "perf_overlay/room",
+      "Scene": "perf_overlay_3d",
+      "Entry": "spawn",
+      "Points": [
+        {
+          "Id": "spawn",
+          "Capacity": 1
+        }
+      ],
+      "Camera": {
+        "Position": [
+          0,
+          3,
+          7
+        ],
+        "Far": 100
+      }
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "id": "perf_overlay",
+  "name": "Resource monitor",
+  "version": "0.1.0",
+  "author": "ct",
+  "categories": [
+    "tools",
+    "debug"
+  ],
+  "depends": [
+    "ui_base>=0.1.0"
+  ],
+  "sources": [
+    "src/**/*.cs"
+  ],
+  "test_suites": [
+    {
+      "id": "contracts",
+      "activate": [
+        "--itest=perf_overlay_contracts"
+      ]
+    },
+    {
+      "id": "test_monitor",
+      "activate": [
+        "--itest=",
+        "--run-tests",
+        "--choices=",
+        "--combat3d-demo",
+        "--actor3d-demo",
+        "--world3d-demo",
+        "--demo=",
+        "--matrix"
+      ]
+    }
+  ]
+}
