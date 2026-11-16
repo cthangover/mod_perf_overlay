@@ -417,10 +417,10 @@ namespace Cthangover.Mods.PerformanceOverlay
             v["pipeline_refresh_delta"] = pipelineWindow;
             pipelineWindow = 0;
             v["physics_engine"] = ProjectSettings.GetSetting("physics/3d/physics_engine").AsString();
-            v["physics_hz"] = Engine.PhysicsTicksPerSecond;
-            v["max_fps"] = Engine.MaxFps;
+            v["physics_hz"] = Godot.Engine.PhysicsTicksPerSecond;
+            v["max_fps"] = Godot.Engine.MaxFps;
             v["vsync"] = DisplayServer.WindowGetVsyncMode().ToString();
-            v["time_scale"] = Engine.TimeScale;
+            v["time_scale"] = Godot.Engine.TimeScale;
             v["window_focused"] = GetWindow().HasFocus();
             v["simulation_paused"] = ShellSession.Current?.SimulationPaused ?? GetTree().Paused;
             v["bodies_2d"] = Monitor(Performance.Monitor.Physics2DActiveObjects);
@@ -430,7 +430,7 @@ namespace Cthangover.Mods.PerformanceOverlay
             v["pairs_3d"] = Monitor(Performance.Monitor.Physics3DCollisionPairs);
             v["islands_3d"] = Monitor(Performance.Monitor.Physics3DIslandCount);
             v["loaded_mods"] = ModManager.Instance.Mods.Count;
-            v["godot"] = Engine.GetVersionInfo()["string"].AsString();
+            v["godot"] = Godot.Engine.GetVersionInfo()["string"].AsString();
             v["renderer"] = RenderingServer.GetCurrentRenderingMethod();
             v["driver"] = RenderingServer.GetCurrentRenderingDriverName();
             v["gpu"] = RenderingServer.GetVideoAdapterName();

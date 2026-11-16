@@ -22,7 +22,7 @@ namespace Cthangover.Mods.PerformanceOverlay.Contracts
             ModAssert.Equal("monitor/current-case", progress.TestId);
             ModAssert.Equal(1, progress.Index);
             ModAssert.Equal(1, progress.Total);
-            var tree = (SceneTree)Engine.GetMainLoop();
+            var tree = (SceneTree)Godot.Engine.GetMainLoop();
             var watch = System.Diagnostics.Stopwatch.StartNew();
             while (watch.Elapsed.TotalSeconds < .4)
             {
