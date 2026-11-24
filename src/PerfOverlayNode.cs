@@ -19,6 +19,9 @@ using Godot;
 
 namespace Cthangover.Mods.PerformanceOverlay
 {
+    using System.Linq;
+    using Cthangover.Core.Games;
+
     /// <summary>
     /// Always-processing diagnostics independent of game simulation. Per-frame collection uses numeric fields/fixed
     /// buffers; formatted text and providers run at four Hz.
@@ -139,7 +142,7 @@ namespace Cthangover.Mods.PerformanceOverlay
             Current = this;
             ProcessMode = ProcessModeEnum.Always;
             ProcessPriority = 10000;
-            run = new PerfRunContext(OS.GetCmdlineUserArgs());
+            run = new PerfRunContext(GameLaunchArgs.Startup.UserArgs.ToArray());
             ReadParameters();
             canvas = GetNode<CanvasLayer>("ResourceMonitor");
             panel = GetNode<PanelContainer>("ResourceMonitor/MetricsPanel");
