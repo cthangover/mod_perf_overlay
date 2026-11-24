@@ -83,6 +83,17 @@ namespace Cthangover.Mods.PerformanceOverlay
             }
         }
 
+        /// <summary>
+        /// Starts an independent window, discarding frame and hitch history while retaining the allocated buffers.
+        /// </summary>
+        public void Reset()
+        {
+            head = count = 0;
+            lastTime = -1;
+            over50 = over250 = dropped = 0;
+            lastHitch = null;
+        }
+
         private void Trim(double seconds)
         {
             while (count > 0 && times[head] < seconds - 5)

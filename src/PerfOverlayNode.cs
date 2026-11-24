@@ -54,10 +54,17 @@ namespace Cthangover.Mods.PerformanceOverlay
         private long pipelinePrevious;
         private long pipelineFrame;
         private long pipelineWindow;
+        private bool pipelineBaseline;
         private bool? visibilityOverride;
+        private bool? samplingOverride;
         private bool initialized;
-        private bool measureEnabled;
+        private bool appliedSampling;
+        private bool currentSnapshot;
+        private bool nativeRendering;
+        private Rid measuredViewport;
         private bool captureHidden;
+        private double? snapshotAt;
+        private long windowId = 1;
         private PerfRunContext run;
         private PerfCaptureBridge bridge;
 
@@ -81,9 +88,31 @@ namespace Cthangover.Mods.PerformanceOverlay
         {
             get
             {
-                return visibilityOverride ?? (run?.IsTest == true || PerfOverlaySettings.Enabled);
+                return visibilityOverride ?? DefaultEnabled;
             }
         }
+
+        private bool DefaultEnabled => run?.IsTest == true || PerfOverlaySettings.Enabled;
+
+        /// <summary>Whether frames are being collected, independently of presentation or screenshot suppression.</summary>
+        internal bool Sampling => samplingOverride ?? DefaultEnabled;
+
+        /// <summary>Identifies the current frame window and its cumulative hitch counters.</summary>
+        internal long WindowId => windowId;
+
+        /// <summary>Time since the last measurement snapshot, or null until a sampling refresh occurred.</summary>
+        internal double? SnapshotAgeMs => snapshotAt.HasValue
+            ? Math.Max(0, Stopwatch.GetElapsedTime(started).TotalMilliseconds - snapshotAt.Value * 1000)
+            : null;
+
+        /// <summary>Identifies a snapshot refreshed since the current sampling interval began.</summary>
+        internal bool CurrentSnapshot => currentSnapshot;
+
+        /// <summary>Whether the current display backend can provide timings for rendered frames.</summary>
+        internal bool NativeRendering => nativeRendering;
+
+        /// <summary>Whether the overlay currently requests native render timing on its viewport.</summary>
+        internal bool NativeTimingEnabled => measuredViewport.IsValid;
 
         /// <summary>
         /// Actual diagnostic CanvasLayer visibility, including temporary suppression during capture.
@@ -143,6 +172,7 @@ namespace Cthangover.Mods.PerformanceOverlay
             ProcessMode = ProcessModeEnum.Always;
             ProcessPriority = 10000;
             run = new PerfRunContext(GameLaunchArgs.Startup.UserArgs.ToArray());
+            nativeRendering = DisplayServer.GetName() != "headless";
             ReadParameters();
             canvas = GetNode<CanvasLayer>("ResourceMonitor");
             panel = GetNode<PanelContainer>("ResourceMonitor/MetricsPanel");
@@ -245,12 +275,12 @@ namespace Cthangover.Mods.PerformanceOverlay
             ModSettingsRegistry.ApplyValues("perf_overlay", values);
             ModSettingsRegistry.SaveModSettings("perf_overlay", values);
             visibilityOverride = enabled;
-            ApplyVisibility();
+            samplingOverride = enabled;
+            ApplyPolicy();
         }
 
         /// <summary>
-        /// Reapplies saved settings and test-default visibility, clears the transient toggle override and requests
-        /// an immediate quarter-second text refresh.
+        /// Reapplies saved settings and test defaults for presentation and sampling, clearing both run overrides.
         /// </summary>
         public void ApplySettings()
         {
@@ -260,18 +290,93 @@ namespace Cthangover.Mods.PerformanceOverlay
             }
 
             visibilityOverride = null;
-            ApplyVisibility();
+            samplingOverride = null;
+            ApplyPolicy();
             refreshAt = 0;
+        }
+
+        /// <summary>
+        /// Overrides sampling and presentation for this run without writing the user's settings.
+        /// Reset starts a clean frame and hitch window even while sampling is stopped.
+        /// </summary>
+        internal bool ConfigureMeasurement(bool? enabled, bool? overlay, bool reset)
+        {
+            var changed = reset || (enabled.HasValue && samplingOverride != enabled)
+                || (overlay.HasValue && visibilityOverride != overlay);
+            if (enabled.HasValue)
+                samplingOverride = enabled;
+            if (overlay.HasValue)
+                visibilityOverride = overlay;
+            if (reset)
+                ResetMeasurement();
+
+            ApplyPolicy();
+            if (Enabled && Snapshot.Values.Count > 0)
+                DrawSnapshot(Snapshot);
+            if (changed)
+                refreshAt = 0;
+            return changed;
+        }
+
+        private void ResetMeasurement()
+        {
+            windowId++;
+            frames.Reset();
+            frames.Summarize(lastSeconds, summary);
+            Snapshot = new PerfOverlaySnapshot();
+            snapshotAt = null;
+            currentSnapshot = false;
+            previous = 0;
+            pipelineBaseline = false;
+            pipelineFrame = pipelineWindow = 0;
+            costTotal = LastCpuMs = MaxCpuMs = 0;
+            costFrames = 0;
+            text.Text = string.Empty;
+            graph.Refresh(frames);
+        }
+
+        private void ApplyPolicy()
+        {
+            ApplyVisibility();
+            var sampling = Sampling;
+            if (sampling && !appliedSampling)
+            {
+                currentSnapshot = false;
+                refreshAt = 0;
+            }
+            appliedSampling = sampling;
+
+            if (sampling && nativeRendering)
+            {
+                if (!measuredViewport.IsValid)
+                {
+                    measuredViewport = GetViewport().GetViewportRid();
+                    RenderingServer.ViewportSetMeasureRenderTime(measuredViewport, true);
+                }
+            }
+            else
+            {
+                StopNativeTiming();
+            }
+            if (!sampling)
+            {
+                previous = 0;
+                pipelineBaseline = false;
+                pipelineWindow = 0;
+            }
         }
 
         private void ApplyVisibility()
         {
             canvas.Visible = Enabled && !captureHidden;
-            if (Enabled && !measureEnabled)
+        }
+
+        private void StopNativeTiming()
+        {
+            if (measuredViewport.IsValid)
             {
-                RenderingServer.ViewportSetMeasureRenderTime(GetViewport().GetViewportRid(), true);
-                measureEnabled = true;
-                previous = 0;
+                RenderingServer.ViewportSetMeasureRenderTime(measuredViewport, false);
+                measuredViewport = default;
             }
         }
 
@@ -311,7 +416,7 @@ namespace Cthangover.Mods.PerformanceOverlay
         {
             var begin = Stopwatch.GetTimestamp();
             bridge?.Pump();
-            if (!Enabled)
+            if (!Sampling)
             {
                 previous = 0;
                 return;
@@ -336,17 +441,18 @@ namespace Cthangover.Mods.PerformanceOverlay
                 refreshAt = 0;
             }
 
-            renderMs = RenderingServer.ViewportGetMeasuredRenderTimeCpu(viewport.GetViewportRid())
-                + RenderingServer.GetFrameSetupTimeCpu();
-            gpuMs = RenderingServer.ViewportGetMeasuredRenderTimeGpu(viewport.GetViewportRid());
+            renderMs = NativeTimingEnabled ? RenderingServer.ViewportGetMeasuredRenderTimeCpu(measuredViewport)
+                + RenderingServer.GetFrameSetupTimeCpu() : 0;
+            gpuMs = NativeTimingEnabled ? RenderingServer.ViewportGetMeasuredRenderTimeGpu(measuredViewport) : 0;
             var pipelines = (long)(RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.PipelineCompilationsCanvas)
                 + RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.PipelineCompilationsMesh)
                 + RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.PipelineCompilationsSurface)
                 + RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.PipelineCompilationsDraw)
                 + RenderingServer.GetRenderingInfo(RenderingServer.RenderingInfo.PipelineCompilationsSpecialization));
-            pipelineFrame = Math.Max(0, pipelines - pipelinePrevious);
+            pipelineFrame = pipelineBaseline ? Math.Max(0, pipelines - pipelinePrevious) : 0;
             pipelineWindow += pipelineFrame;
             pipelinePrevious = pipelines;
+            pipelineBaseline = true;
             if (lastSeconds >= refreshAt)
             {
                 refreshAt = lastSeconds + .25;
@@ -440,6 +546,7 @@ namespace Cthangover.Mods.PerformanceOverlay
             v["resolution"] = viewport.GetVisibleRect().Size.ToString();
             v["window_size"] = GetWindow().Size.ToString();
             v["content_scale"] = GetWindow().ContentScaleFactor;
+            v["render_scale_3d"] = viewport.Scaling3DScale;
             v["quality"] = quality;
             v["run_parameters"] = parameters;
             if (Boot.ModsReady && ModManager.Instance.Mods.ContainsKey("time_base"))
@@ -472,9 +579,18 @@ namespace Cthangover.Mods.PerformanceOverlay
             v["arguments"] = run.Arguments;
             PerfOverlaySectionConsumer.Collect(snapshot);
             Snapshot = snapshot;
+            snapshotAt = lastSeconds;
+            currentSnapshot = true;
+            if (Enabled)
+                DrawSnapshot(snapshot);
+        }
+
+        private void DrawSnapshot(PerfOverlaySnapshot snapshot)
+        {
+            var v = snapshot.Values;
             builder.Clear();
-            AppendTestProgress(v, progress);
-            builder.Append(scene).Append(" · ").Append(shell).Append(" · ").Append(v["physics_engine"]).AppendLine();
+            AppendTestProgress(v, ModTestProgress.Current);
+            builder.Append(v["scene_id"]).Append(" · ").Append(v["shell"]).Append(" · ").Append(v["physics_engine"]).AppendLine();
             AppendFrameStatistics(v);
             if (PerfOverlaySettings.Detailed)
             {
@@ -638,12 +754,12 @@ namespace Cthangover.Mods.PerformanceOverlay
             GameLogger.LogEmitted -= OnLog;
             ModEventBus.Unsubscribe<SceneEnteredEvent>(SceneChanged);
             ViewportCaptureExclusions.Unregister(canvas);
+            StopNativeTiming();
             if (GodotObject.IsInstanceValid(canvas))
             {
                 canvas.Free();
             }
 
-            // Timing ownership is shared with profilers; retain its enabled state instead of disabling someone else's instrumentation.
             if (Current == this)
             {
                 Current = null;
